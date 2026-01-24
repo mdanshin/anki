@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="ru">
+
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <meta name="theme-color" content="#0b1020" />
+
+  <title>Anki (web)</title>
+
+  <link rel="manifest" href="./site.webmanifest?v=20260124" />
+  <link rel="icon" href="./assets/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="./assets/icon.svg" />
+
+  <link rel="stylesheet" href="./styles.css?v=20260124" />
+</head>
+
+<body>
+  <canvas id="bg" aria-hidden="true"></canvas>
+
+  <main class="container" role="main">
+    <header class="topbar">
+      <div class="topbar__left">
+        <a class="brand" href="#/decks" aria-label="Decks">
+          <span class="brand__dot" aria-hidden="true"></span>
+          <span class="brand__text">Anki</span>
+        </a>
+      </div>
+      <nav class="topbar__right" aria-label="Навигация">
+        <a class="navlink" href="#/decks" id="navDecks">Колоды</a>
+        <a class="navlink" href="#/browse" id="navBrowse">Браузер</a>
+        <a class="navlink" href="#/stats" id="navStats">Статистика</a>
+        <button class="btn btn--sm btn--secondary" id="btnExport" type="button">Экспорт</button>
+        <label class="btn btn--sm btn--secondary" for="fileImport" style="cursor:pointer;">Импорт</label>
+        <input id="fileImport" type="file" accept="application/json" hidden />
+      </nav>
+    </header>
+
+    <!-- DECKS -->
+    <section class="screen" id="screenDecks" data-screen>
+      <div class="row row--split">
+        <div>
+          <h1 class="h1">Колоды</h1>
+          <p class="muted">Добавляй карточки и учи по расписанию.</p>
+        </div>
+        <button class="btn btn--secondary" id="btnAddDeck" type="button">+ Колода</button>
+      </div>
+
+      <div class="card">
+        <div class="row row--split">
+          <h2 class="h2">Сегодня</h2>
+          <span class="pill" id="todayPill">—</span>
+        </div>
+        <div class="row row--buttons">
+          <button class="btn" id="btnReviewNow" type="button">Начать повторение</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row row--split">
+          <h2 class="h2">Список</h2>
+          <span class="muted small" id="decksCount">—</span>
+        </div>
+        <div id="decksList" class="stack" aria-live="polite"></div>
+      </div>
+
+      <p class="footnote muted small">Данные хранятся локально в браузере (как у PWA). Синхронизации с AnkiWeb пока нет.
+      </p>
+    </section>
+
+    <!-- DECK -->
+    <section class="screen" id="screenDeck" data-screen hidden>
+      <div class="row row--split">
+        <div>
+          <h1 class="h1" id="deckTitle">—</h1>
+          <p class="muted" id="deckSubtitle">—</p>
+        </div>
+        <div class="row" style="justify-content:flex-end;">
+          <button class="btn btn--secondary" id="btnRenameDeck" type="button">Переименовать</button>
+          <button class="btn btn--secondary" id="btnDeleteDeck" type="button">Удалить</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row row--buttons">
+          <button class="btn" id="btnDeckReview" type="button">Учить эту колоду</button>
+          <button class="btn btn--secondary" id="btnGoAdd" type="button">+ Карточка</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row row--split">
+          <h2 class="h2">Карточки</h2>
+          <span class="muted small" id="deckCardsCount">—</span>
+        </div>
+        <div id="deckCardsList" class="list" role="list"></div>
+      </div>
+
+      <div class="row">
+        <a class="btn btn--secondary" href="#/decks">Назад</a>
+      </div>
+    </section>
+
+    <!-- ADD / EDIT -->
+    <section class="screen" id="screenAdd" data-screen hidden>
+      <div class="row row--split">
+        <div>
+          <h1 class="h1" id="addTitle">Новая карточка</h1>
+          <p class="muted" id="addSubtitle">—</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="formGrid">
+          <label class="field">
+            <span class="field__label">Колода</span>
+            <select class="input" id="selectDeck"></select>
+          </label>
+          <label class="field">
+            <span class="field__label">Теги (через пробел)</span>
+            <input class="input" id="inputTags" type="text" placeholder="например: eng verbs" />
+          </label>
+        </div>
+
+        <label class="field" style="margin-top:10px;">
+          <span class="field__label">Вопрос (Front)</span>
+          <textarea class="textarea" id="inputFront" rows="4"
+            placeholder="Например: What is the capital of France?"></textarea>
+        </label>
+
+        <label class="field" style="margin-top:10px;">
+          <span class="field__label">Ответ (Back)</span>
+          <textarea class="textarea" id="inputBack" rows="4" placeholder="Paris"></textarea>
+        </label>
+
+        <div class="row row--buttons" style="margin-top:10px;">
+          <button class="btn" id="btnSaveNote" type="button">Сохранить</button>
+          <a class="btn btn--secondary" href="#/decks" id="btnCancelEdit">Отмена</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- REVIEW -->
+    <section class="screen screen--review" id="screenReview" data-screen hidden>
+      <div class="reviewTop">
+        <div class="pill" id="reviewContext">—</div>
+        <button class="btn btn--sm btn--secondary" id="btnExitReview" type="button">Выйти</button>
+      </div>
+
+      <div class="card reviewCard" role="group" aria-label="Карточка">
+        <div class="reviewFaceLabel muted small" id="reviewFaceLabel">Вопрос</div>
+        <div class="reviewText" id="reviewText">—</div>
+      </div>
+
+      <div class="row row--buttons" id="reviewActionsQuestion">
+        <button class="btn" id="btnShowAnswer" type="button">Показать ответ</button>
+      </div>
+
+      <div class="card" id="reviewActionsAnswer" hidden>
+        <div class="muted small" style="margin-bottom:8px;">Оценка (чем лучше — тем дальше отложим)</div>
+        <div class="row row--buttons">
+          <button class="btn btn--danger" id="btnAgain" type="button">Again</button>
+          <button class="btn btn--warn" id="btnHard" type="button">Hard</button>
+          <button class="btn btn--good" id="btnGood" type="button">Good</button>
+          <button class="btn" id="btnEasy" type="button">Easy</button>
+        </div>
+      </div>
+
+      <div class="card" id="reviewDoneCard" hidden>
+        <h2 class="h2">Готово на сегодня</h2>
+        <p class="muted">Карточек к повторению больше нет (или достигнут лимит).</p>
+        <div class="row row--buttons" style="margin-top:10px;">
+          <a class="btn" href="#/decks">К колодам</a>
+        </div>
+      </div>
+    </section>
+
+    <!-- BROWSE -->
+    <section class="screen" id="screenBrowse" data-screen hidden>
+      <div class="row row--split">
+        <div>
+          <h1 class="h1">Браузер</h1>
+          <p class="muted">Поиск по вопросам/ответам и редактирование.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="formGrid">
+          <label class="field">
+            <span class="field__label">Колода</span>
+            <select class="input" id="browseDeck"></select>
+          </label>
+          <label class="field">
+            <span class="field__label">Поиск</span>
+            <input class="input" id="browseQuery" type="search" placeholder="front/back/tag" />
+          </label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="row row--split">
+          <h2 class="h2">Результаты</h2>
+          <span class="muted small" id="browseCount">—</span>
+        </div>
+        <div id="browseList" class="list" role="list"></div>
+      </div>
+    </section>
+
+    <!-- STATS -->
+    <section class="screen" id="screenStats" data-screen hidden>
+      <div class="row row--split">
+        <div>
+          <h1 class="h1">Статистика</h1>
+          <p class="muted">Сегодня и общие счётчики.</p>
+        </div>
+      </div>
+
+      <div class="card">
+        <div id="statsGrid" class="statsGrid"></div>
+      </div>
+
+      <div class="card">
+        <h2 class="h2">Настройки лимитов</h2>
+        <div class="formGrid">
+          <label class="field">
+            <span class="field__label">New/day</span>
+            <input class="input" id="settingNewPerDay" type="number" inputmode="numeric" min="0" max="999" step="1" />
+          </label>
+          <label class="field">
+            <span class="field__label">Reviews/day</span>
+            <input class="input" id="settingReviewsPerDay" type="number" inputmode="numeric" min="0" max="9999"
+              step="1" />
+          </label>
+        </div>
+        <div class="row row--buttons" style="margin-top:10px;">
+          <button class="btn" id="btnSaveSettings" type="button">Сохранить</button>
+          <button class="btn btn--secondary" id="btnResetAll" type="button">Сбросить всё</button>
+        </div>
+      </div>
+
+      <p class="footnote muted small">Алгоритм интервального повторения здесь упрощён (SM-2-подобный), не 1-в-1 как в
+        Anki.</p>
+    </section>
+
+    <!-- MODAL -->
+    <dialog class="modal" id="modal">
+      <form method="dialog" class="modal__card">
+        <h3 class="h3" id="modalTitle">—</h3>
+        <p class="muted" id="modalText">—</p>
+
+        <label class="field" id="modalField" hidden>
+          <span class="field__label" id="modalFieldLabel">—</span>
+          <input class="input" id="modalInput" type="text" />
+        </label>
+
+        <div class="row row--buttons">
+          <button class="btn btn--secondary" value="cancel">Отмена</button>
+          <button class="btn" id="modalOk" value="ok">Ок</button>
+        </div>
+      </form>
+    </dialog>
+
+  </main>
+
+  <script src="./app.js?v=20260124" defer></script>
+</body>
+
+</html>
