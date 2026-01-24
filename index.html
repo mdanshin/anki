@@ -31,6 +31,7 @@
         <a class="navlink" href="#/decks" id="navDecks">Колоды</a>
         <a class="navlink" href="#/browse" id="navBrowse">Браузер</a>
         <a class="navlink" href="#/stats" id="navStats">Статистика</a>
+        <button class="btn btn--sm btn--secondary" id="btnReloadWords" type="button">Обновить слова</button>
         <button class="btn btn--sm btn--secondary" id="btnExport" type="button">Экспорт</button>
         <label class="btn btn--sm btn--secondary" for="fileImport" style="cursor:pointer;">Импорт</label>
         <input id="fileImport" type="file" accept="application/json" hidden />
@@ -137,6 +138,22 @@
         <div class="row row--buttons" style="margin-top:10px;">
           <button class="btn" id="btnSaveNote" type="button">Сохранить</button>
           <a class="btn btn--secondary" href="#/decks" id="btnCancelEdit">Отмена</a>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2 class="h2">Массовое добавление</h2>
+        <p class="muted small">Вставь список строк в формате <strong>front\tback</strong> (как в Anki export) или
+          <strong>front;back</strong>. Пустые строки и строки с <strong>#</strong> в начале игнорируются.</p>
+
+        <label class="field" style="margin-top:10px;">
+          <span class="field__label">Список</span>
+          <textarea class="textarea" id="bulkInput" rows="6"
+            placeholder="house\tдом\ncat\tкот\n# комментарий\nrun;бежать"></textarea>
+        </label>
+
+        <div class="row row--buttons" style="margin-top:10px;">
+          <button class="btn btn--secondary" id="btnBulkAdd" type="button">Добавить пачкой</button>
         </div>
       </div>
     </section>

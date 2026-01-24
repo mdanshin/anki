@@ -5,6 +5,8 @@
 
 const APP_VERSION = '2026-01-24';
 
+const WORDS_CONFIG_URL = './words/decks.json';
+
 /** @typedef {'again'|'hard'|'good'|'easy'} Rating */
 
 const STORAGE_KEY = 'ankiweb_like.v1';
@@ -67,6 +69,8 @@ const ui = {
   navBrowse: document.getElementById('navBrowse'),
   navStats: document.getElementById('navStats'),
 
+  btnReloadWords: document.getElementById('btnReloadWords'),
+
   btnExport: document.getElementById('btnExport'),
   fileImport: document.getElementById('fileImport'),
 
@@ -93,6 +97,8 @@ const ui = {
   inputBack: document.getElementById('inputBack'),
   btnSaveNote: document.getElementById('btnSaveNote'),
   btnCancelEdit: document.getElementById('btnCancelEdit'),
+  bulkInput: document.getElementById('bulkInput'),
+  btnBulkAdd: document.getElementById('btnBulkAdd'),
 
   reviewContext: document.getElementById('reviewContext'),
   btnExitReview: document.getElementById('btnExitReview'),
@@ -125,6 +131,265 @@ const ui = {
   modalFieldLabel: document.getElementById('modalFieldLabel'),
   modalInput: document.getElementById('modalInput'),
 };
+
+function fnv1a32Hex(input) {
+  const s = String(input || '');
+  let h = 0x811c9dc5;
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  // >>> 0 ensures uint32
+  return (h >>> 0).toString(16).padStart(8, '0');
+}
+
+function stableId(prefix, key) {
+  return `${prefix}_${fnv1a32Hex(key)}`;
+}
+
+function parseWordLines(text) {
+  const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = raw.split('\n');
+  /** @type {{front:string, back:string, tags:string[]}[]} */
+  const out = [];
+  let skipped = 0;
+
+  for (const line of lines) {
+    const s = String(line || '').trim();
+    if (!s) continue;
+    if (s.startsWith('#')) continue;
+
+    // Prefer tab, then semicolon, then comma.
+    let delim = '';
+    if (s.includes('\t')) delim = '\t';
+    else if (s.includes(';')) delim = ';';
+    else if (s.includes(',')) delim = ',';
+
+    if (!delim) {
+      skipped += 1;
+      continue;
+    }
+
+    const parts = s.split(delim);
+    const front = String(parts[0] || '').trim();
+    const back = String(parts[1] || '').trim();
+    const tagsRaw = String(parts[2] || '').trim();
+    if (!front || !back) {
+      skipped += 1;
+      continue;
+    }
+    out.push({ front, back, tags: normalizeTags(tagsRaw) });
+  }
+
+  return { items: out, skipped };
+}
+
+async function tryFetchText(url) {
+  const u = String(url || '').trim();
+  if (!u) return null;
+  const res = await fetch(u, { cache: 'no-store' });
+  if (!res.ok) return null;
+  return await res.text();
+}
+
+function deckKeyFromDef(def) {
+  const explicit = (def && typeof def === 'object' && 'id' in def) ? String(def.id || '').trim() : '';
+  const name = (def && typeof def === 'object' && 'name' in def) ? String(def.name || '').trim() : '';
+  return explicit || name;
+}
+
+async function syncFromWordFiles({ showAlerts = false } = {}) {
+  let cfgText = null;
+  try {
+    cfgText = await tryFetchText(WORDS_CONFIG_URL);
+  } catch (e) {
+    if (showAlerts) window.alert(`Не получилось загрузить ${WORDS_CONFIG_URL}.\n\nПроверь что файл существует и сайт открыт через HTTP.`);
+    return { ok: false, reason: 'no_config', error: e };
+  }
+
+  if (!cfgText) {
+    if (showAlerts) window.alert(`Файл ${WORDS_CONFIG_URL} не найден. Создай его и положи рядом папку words/.`);
+    return { ok: false, reason: 'no_config' };
+  }
+
+  /** @type {any} */
+  let cfg;
+  try {
+    cfg = JSON.parse(cfgText);
+  } catch (e) {
+    if (showAlerts) window.alert(`Ошибка JSON в ${WORDS_CONFIG_URL}: ${String(e && e.message ? e.message : e)}`);
+    return { ok: false, reason: 'bad_config', error: e };
+  }
+
+  if (!Array.isArray(cfg)) {
+    if (showAlerts) window.alert(`${WORDS_CONFIG_URL} должен быть массивом.`);
+    return { ok: false, reason: 'bad_config' };
+  }
+
+  let totalAdded = 0;
+  let totalUpdated = 0;
+  let totalRemoved = 0;
+  let totalSkipped = 0;
+
+  for (const def of cfg) {
+    if (!def || typeof def !== 'object') continue;
+    const name = String(def.name || '').trim();
+    const file = String(def.file || '').trim();
+    const tagsBase = normalizeTags(String(def.tags || ''));
+    const key = deckKeyFromDef(def);
+    if (!name || !file || !key) continue;
+
+    const deckId = stableId('deck', `file:${key}`);
+    let deck = getDeck(deckId);
+    const nowIso = new Date().toISOString();
+    if (!deck) {
+      deck = { id: deckId, name, createdAt: nowIso, source: { type: 'file', file, key } };
+      db.decks.push(deck);
+      totalAdded += 1;
+    } else {
+      // Keep id stable, update name/source.
+      deck.name = name;
+      /** @type {any} */ (deck).source = { type: 'file', file, key };
+    }
+
+    let text = null;
+    try {
+      text = await tryFetchText(file);
+    } catch {
+      text = null;
+    }
+    if (!text) {
+      if (showAlerts) window.alert(`Не получилось загрузить файл колоды: ${file}`);
+      continue;
+    }
+
+    const parsed = parseWordLines(text);
+    totalSkipped += parsed.skipped;
+
+    const desiredNoteIds = new Set();
+    for (const it of parsed.items) {
+      const mergedTags = Array.from(new Set([...(tagsBase || []), ...(it.tags || [])]));
+      const noteId = stableId('note', `${deckId}\n${it.front}\n${it.back}`);
+      desiredNoteIds.add(noteId);
+
+      const existing = getNote(noteId);
+      if (!existing) {
+        db.notes.push({
+          id: noteId,
+          deckId,
+          front: it.front,
+          back: it.back,
+          tags: mergedTags,
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+
+        const cardId = stableId('card', noteId);
+        db.cards.push({
+          id: cardId,
+          noteId,
+          deckId,
+          due: dayNumber(),
+          interval: 0,
+          ease: 2.5,
+          reps: 0,
+          lapses: 0,
+          state: 'new',
+          createdAt: nowIso,
+          updatedAt: nowIso,
+        });
+        totalAdded += 1;
+      } else {
+        // Keep schedule but ensure fields reflect file.
+        const before = `${existing.front}\n${existing.back}\n${(existing.tags || []).join(' ')}`;
+        existing.deckId = deckId;
+        existing.front = it.front;
+        existing.back = it.back;
+        existing.tags = mergedTags;
+        existing.updatedAt = nowIso;
+
+        const after = `${existing.front}\n${existing.back}\n${(existing.tags || []).join(' ')}`;
+        if (before !== after) totalUpdated += 1;
+
+        const card = getCardByNote(noteId);
+        if (card) {
+          card.deckId = deckId;
+          card.updatedAt = nowIso;
+        } else {
+          // Repair missing card
+          db.cards.push({
+            id: stableId('card', noteId),
+            noteId,
+            deckId,
+            due: dayNumber(),
+            interval: 0,
+            ease: 2.5,
+            reps: 0,
+            lapses: 0,
+            state: 'new',
+            createdAt: nowIso,
+            updatedAt: nowIso,
+          });
+          totalAdded += 1;
+        }
+      }
+    }
+
+    // Remove notes/cards in this managed deck that are not present in file.
+    const noteIdsInDeck = db.notes.filter((n) => n.deckId === deckId).map((n) => n.id);
+    const toRemove = noteIdsInDeck.filter((id) => !desiredNoteIds.has(id));
+    if (toRemove.length > 0) {
+      const rmSet = new Set(toRemove);
+      db.notes = db.notes.filter((n) => !rmSet.has(n.id));
+      db.cards = db.cards.filter((c) => !rmSet.has(c.noteId));
+      totalRemoved += toRemove.length;
+    }
+  }
+
+  saveDb();
+
+  if (showAlerts) {
+    window.alert(`Синхронизация слов из файлов завершена.\n\nДобавлено: ${totalAdded}\nОбновлено: ${totalUpdated}\nУдалено: ${totalRemoved}\nПропущено строк: ${totalSkipped}`);
+  }
+
+  return { ok: true, added: totalAdded, updated: totalUpdated, removed: totalRemoved, skipped: totalSkipped };
+}
+
+function parseBulkLines(text) {
+  const raw = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  const lines = raw.split('\n');
+
+  /** @type {{front:string, back:string}[]} */
+  const pairs = [];
+  let skipped = 0;
+
+  for (const line of lines) {
+    const s = String(line || '').trim();
+    if (!s) continue;
+    if (s.startsWith('#')) continue;
+
+    // Prefer tab (Anki export), then semicolon.
+    let delim = '';
+    if (s.includes('\t')) delim = '\t';
+    else if (s.includes(';')) delim = ';';
+
+    if (!delim) {
+      skipped += 1;
+      continue;
+    }
+
+    const idx = s.indexOf(delim);
+    const front = s.slice(0, idx).trim();
+    const back = s.slice(idx + 1).trim();
+    if (!front || !back) {
+      skipped += 1;
+      continue;
+    }
+    pairs.push({ front, back });
+  }
+
+  return { pairs, skipped };
+}
 
 /** @type {{
  *  version: number,
@@ -890,6 +1155,18 @@ function setupHandlers() {
     renderDecks();
   });
 
+  if (ui.btnReloadWords) {
+    ui.btnReloadWords.addEventListener('click', async () => {
+      await syncFromWordFiles({ showAlerts: true });
+      renderDecks();
+      renderStats();
+      // Re-render current screen if needed
+      const route = parseRoute();
+      if (route.name === 'deck') renderDeck(route.deckId);
+      if (route.name === 'browse') renderBrowse();
+    });
+  }
+
   ui.btnReviewNow.addEventListener('click', () => {
     location.hash = '#/review';
   });
@@ -915,6 +1192,38 @@ function setupHandlers() {
 
     location.hash = `#/deck/${encodeURIComponent(deckId)}`;
   });
+
+  if (ui.btnBulkAdd && ui.bulkInput) {
+    ui.btnBulkAdd.addEventListener('click', () => {
+      const deckId = String(ui.selectDeck.value || '').trim();
+      const tags = normalizeTags(ui.inputTags.value);
+      const bulk = String(ui.bulkInput.value || '');
+
+      if (!deckId) return;
+      if (!bulk.trim()) {
+        window.alert('Вставь список строк (front\\tback или front;back).');
+        return;
+      }
+
+      const { pairs, skipped } = parseBulkLines(bulk);
+      if (pairs.length === 0) {
+        window.alert(`Не нашёл ни одной валидной строки. Пример: house\\tдом (tab) или house;дом. Пропущено строк: ${skipped}.`);
+        return;
+      }
+
+      let added = 0;
+      for (const p of pairs) {
+        const id = upsertNote({ noteId: null, deckId, front: p.front, back: p.back, tags });
+        if (id) added += 1;
+      }
+
+      saveDb();
+      renderDecks();
+      window.alert(`Добавлено: ${added}. Пропущено строк: ${skipped}.`);
+      ui.bulkInput.value = '';
+      location.hash = `#/deck/${encodeURIComponent(deckId)}`;
+    });
+  }
 
   ui.btnExitReview.addEventListener('click', () => {
     location.hash = '#/decks';
@@ -1101,9 +1410,16 @@ function initBackground() {
   requestAnimationFrame(tick);
 }
 
-function boot() {
+async function boot() {
   console.info(`Anki (web) version: ${APP_VERSION}`);
   loadDb();
+
+  // Best-effort: if words/decks.json exists, use it as a source of truth.
+  try {
+    await syncFromWordFiles({ showAlerts: false });
+  } catch {
+    // ignore
+  }
 
   initBackground();
   setupHandlers();
@@ -1115,4 +1431,4 @@ function boot() {
   router();
 }
 
-boot();
+void boot();

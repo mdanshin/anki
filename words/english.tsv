@@ -1,0 +1,6 @@
+# Формат: front<TAB>back<TAB>tags(optional)
+# или front;back;tags
+
+house	дом	noun
+cat	кот	noun
+run	бежать	verb

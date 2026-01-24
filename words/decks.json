@@ -1,0 +1,7 @@
+[
+  {
+    "name": "English",
+    "file": "./words/english.tsv",
+    "tags": "eng"
+  }
+]
