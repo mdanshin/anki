@@ -31,6 +31,9 @@
         <a class="navlink" href="#/decks" id="navDecks">Колоды</a>
         <a class="navlink" href="#/browse" id="navBrowse">Браузер</a>
         <a class="navlink" href="#/stats" id="navStats">Статистика</a>
+        <span class="pill" id="cloudPill" title="Облачная синхронизация">Оффлайн</span>
+        <button class="btn btn--sm btn--secondary" id="btnCloudAuth" type="button">Войти</button>
+        <button class="btn btn--sm" id="btnCloudSync" type="button">Sync</button>
         <button class="btn btn--sm btn--secondary" id="btnReloadWords" type="button">Обновить слова</button>
         <button class="btn btn--sm btn--secondary" id="btnExport" type="button">Экспорт</button>
         <label class="btn btn--sm btn--secondary" for="fileImport" style="cursor:pointer;">Импорт</label>
@@ -66,8 +69,8 @@
         <div id="decksList" class="stack" aria-live="polite"></div>
       </div>
 
-      <p class="footnote muted small">Данные хранятся локально в браузере (как у PWA). Синхронизации с AnkiWeb пока нет.
-      </p>
+      <p class="footnote muted small">По умолчанию данные хранятся локально в браузере. Если настроить Supabase (см.
+        README), появится логин и облачная синхронизация между устройствами.</p>
     </section>
 
     <!-- DECK -->
@@ -144,7 +147,8 @@
       <div class="card">
         <h2 class="h2">Массовое добавление</h2>
         <p class="muted small">Вставь список строк в формате <strong>front\tback</strong> (как в Anki export) или
-          <strong>front;back</strong>. Пустые строки и строки с <strong>#</strong> в начале игнорируются.</p>
+          <strong>front;back</strong>. Пустые строки и строки с <strong>#</strong> в начале игнорируются.
+        </p>
 
         <label class="field" style="margin-top:10px;">
           <span class="field__label">Список</span>
@@ -278,8 +282,40 @@
       </form>
     </dialog>
 
+    <!-- AUTH MODAL (Supabase) -->
+    <dialog class="modal" id="authModal">
+      <div class="modal__card">
+        <div class="row row--split" style="align-items:flex-start;">
+          <h3 class="h3" id="authTitle">Облачная синхронизация</h3>
+          <button class="btn btn--sm btn--secondary" id="btnAuthClose" type="button">Закрыть</button>
+        </div>
+        <p class="muted" id="authStatus">—</p>
+
+        <label class="field" style="margin-top:8px;">
+          <span class="field__label">Email</span>
+          <input class="input" id="authEmail" type="email" autocomplete="email" placeholder="you@example.com" />
+        </label>
+
+        <label class="field" style="margin-top:8px;">
+          <span class="field__label">Пароль</span>
+          <input class="input" id="authPassword" type="password" autocomplete="current-password"
+            placeholder="••••••••" />
+        </label>
+
+        <div class="row row--buttons" style="margin-top:12px;">
+          <button class="btn" id="btnAuthLogin" type="button">Войти</button>
+          <button class="btn btn--secondary" id="btnAuthSignup" type="button">Регистрация</button>
+          <button class="btn btn--secondary" id="btnAuthLogout" type="button">Выйти</button>
+        </div>
+        <p class="footnote muted small" style="margin-top:10px;">Настройки Supabase берутся из <code>config.js</code>
+          (см. README).</p>
+      </div>
+    </dialog>
+
   </main>
 
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.min.js" defer></script>
+  <script src="./config.js?v=20260124" defer></script>
   <script src="./app.js?v=20260124" defer></script>
 </body>
 

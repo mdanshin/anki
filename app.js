@@ -7,12 +7,34 @@ const APP_VERSION = '2026-01-24';
 
 const WORDS_CONFIG_URL = './words/decks.json';
 
+const SUPABASE_TABLE = 'anki_state';
+
 /** @typedef {'again'|'hard'|'good'|'easy'} Rating */
 
 const STORAGE_KEY = 'ankiweb_like.v1';
+const CLIENT_ID_KEY = 'ankiweb_like.client_id';
 
 function uid(prefix = 'id') {
   return `${prefix}_${Math.random().toString(16).slice(2)}${Date.now().toString(16)}`;
+}
+
+function getClientId() {
+  const cur = localStorage.getItem(CLIENT_ID_KEY);
+  if (cur && String(cur).trim()) return String(cur).trim();
+  const next = uid('client');
+  localStorage.setItem(CLIENT_ID_KEY, next);
+  return next;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function safeDateMs(isoOrNull) {
+  const s = String(isoOrNull || '').trim();
+  if (!s) return 0;
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? t : 0;
 }
 
 function clamp(n, a, b) {
@@ -68,6 +90,10 @@ const ui = {
   navDecks: document.getElementById('navDecks'),
   navBrowse: document.getElementById('navBrowse'),
   navStats: document.getElementById('navStats'),
+
+  cloudPill: document.getElementById('cloudPill'),
+  btnCloudAuth: document.getElementById('btnCloudAuth'),
+  btnCloudSync: document.getElementById('btnCloudSync'),
 
   btnReloadWords: document.getElementById('btnReloadWords'),
 
@@ -130,7 +156,240 @@ const ui = {
   modalField: document.getElementById('modalField'),
   modalFieldLabel: document.getElementById('modalFieldLabel'),
   modalInput: document.getElementById('modalInput'),
+
+  authModal: document.getElementById('authModal'),
+  authStatus: document.getElementById('authStatus'),
+  authEmail: document.getElementById('authEmail'),
+  authPassword: document.getElementById('authPassword'),
+  btnAuthLogin: document.getElementById('btnAuthLogin'),
+  btnAuthSignup: document.getElementById('btnAuthSignup'),
+  btnAuthLogout: document.getElementById('btnAuthLogout'),
+  btnAuthClose: document.getElementById('btnAuthClose'),
 };
+
+const cloud = {
+  enabled: false,
+  client: null,
+  user: null,
+  lastStatus: 'offline',
+};
+
+function getAppConfigStatus() {
+  const cfg = (window && window.ANKI_APP_CONFIG) ? window.ANKI_APP_CONFIG : null;
+  if (!cfg || typeof cfg !== 'object') return { hasConfig: false, url: '', key: '', valid: false };
+  const url = String(cfg.SUPABASE_URL || '').trim();
+  const key = String(cfg.SUPABASE_ANON_KEY || '').trim();
+  return { hasConfig: true, url, key, valid: !!(url && key) };
+}
+
+function setCloudUiStatus(kind, text) {
+  cloud.lastStatus = kind;
+  if (ui.cloudPill) ui.cloudPill.textContent = text;
+  if (ui.btnCloudAuth) ui.btnCloudAuth.textContent = cloud.user ? 'Аккаунт' : 'Войти';
+  if (ui.btnCloudSync) ui.btnCloudSync.disabled = !cloud.user;
+}
+
+function setAuthStatus(text) {
+  if (!ui.authStatus) return;
+  ui.authStatus.textContent = String(text || '—');
+}
+
+async function initCloud() {
+  const cfg = getAppConfigStatus();
+  const supabaseUmd = (window && window.supabase) ? window.supabase : null;
+
+  if (!cfg.hasConfig) {
+    cloud.enabled = false;
+    cloud.client = null;
+    cloud.user = null;
+    setCloudUiStatus('offline', 'Оффлайн');
+    return { ok: false, reason: 'missing_config' };
+  }
+
+  if (!cfg.valid) {
+    cloud.enabled = false;
+    cloud.client = null;
+    cloud.user = null;
+    setCloudUiStatus('offline', 'Оффлайн');
+    return { ok: false, reason: 'empty_config' };
+  }
+
+  if (!supabaseUmd || typeof supabaseUmd.createClient !== 'function') {
+    cloud.enabled = false;
+    cloud.client = null;
+    cloud.user = null;
+    setCloudUiStatus('offline', 'Оффлайн');
+    return { ok: false, reason: 'supabase_sdk_missing' };
+  }
+
+  cloud.enabled = true;
+  cloud.client = supabaseUmd.createClient(cfg.url, cfg.key, {
+    auth: {
+      // Avoid collisions with other apps/projects on same domain.
+      storageKey: 'ankiweb_like.supabase.auth',
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: false,
+    },
+  });
+
+  // Restore session if present.
+  try {
+    const { data: sessionData } = await cloud.client.auth.getSession();
+    if (sessionData && sessionData.session) {
+      const { data, error } = await cloud.client.auth.getUser();
+      if (error) {
+        // Common case: stale/broken session -> clear local and continue.
+        try {
+          await cloud.client.auth.signOut({ scope: 'local' });
+        } catch {
+          // ignore
+        }
+        cloud.user = null;
+      } else {
+        cloud.user = data && data.user ? data.user : null;
+      }
+    } else {
+      cloud.user = null;
+    }
+  } catch {
+    cloud.user = null;
+  }
+
+  setCloudUiStatus(cloud.user ? 'online' : 'offline', cloud.user ? 'Онлайн' : 'Оффлайн');
+
+  // Keep UI in sync with auth changes.
+  cloud.client.auth.onAuthStateChange((_evt, session) => {
+    cloud.user = session && session.user ? session.user : null;
+    setCloudUiStatus(cloud.user ? 'online' : 'offline', cloud.user ? 'Онлайн' : 'Оффлайн');
+  });
+
+  return { ok: true };
+}
+
+async function cloudFetchState() {
+  if (!cloud.client || !cloud.user) return { ok: false, reason: 'no_user' };
+  const { data, error } = await cloud.client
+    .from(SUPABASE_TABLE)
+    .select('state, updated_at')
+    .eq('user_id', cloud.user.id)
+    .maybeSingle();
+  if (error) return { ok: false, reason: 'error', error };
+  if (!data) return { ok: true, state: null, updatedAt: null };
+  return { ok: true, state: data.state || null, updatedAt: data.updated_at || null };
+}
+
+async function cloudPushState() {
+  if (!cloud.client || !cloud.user) return { ok: false, reason: 'no_user' };
+  const updatedAt = nowIso();
+  const payload = { user_id: cloud.user.id, state: db, updated_at: updatedAt };
+  const { error } = await cloud.client.from(SUPABASE_TABLE).upsert(payload);
+  if (error) return { ok: false, reason: 'error', error };
+  db.meta.lastSyncAt = updatedAt;
+  db.meta.lastCloudUpdatedAt = updatedAt;
+  saveDb({ touch: false });
+  return { ok: true, updatedAt };
+}
+
+function applyIncomingDb(incoming) {
+  db = { ...emptyDb(), ...incoming };
+  migrateDbIfNeeded();
+  ensureSeedData();
+  saveDb({ touch: false });
+}
+
+async function cloudPullState(incomingState, incomingUpdatedAt) {
+  const incoming = incomingState && typeof incomingState === 'object' ? incomingState : null;
+  if (!incoming) return { ok: false, reason: 'no_state' };
+  applyIncomingDb(incoming);
+  // Preserve/update sync markers.
+  db.meta.lastSyncAt = nowIso();
+  db.meta.lastCloudUpdatedAt = String(incomingUpdatedAt || '').trim() || db.meta.lastCloudUpdatedAt;
+  saveDb({ touch: false });
+  return { ok: true };
+}
+
+async function cloudSyncNow({ interactive = true } = {}) {
+  if (!cloud.enabled) {
+    if (interactive) window.alert('Облачная синхронизация не настроена: нет config.js или не загрузился supabase-js.');
+    return { ok: false, reason: 'not_configured' };
+  }
+  if (!cloud.user) {
+    if (interactive) window.alert('Сначала войди в аккаунт.');
+    return { ok: false, reason: 'no_user' };
+  }
+
+  setCloudUiStatus('sync', 'Sync…');
+  try {
+    const remote = await cloudFetchState();
+    if (!remote.ok) {
+      setCloudUiStatus('online', 'Онлайн');
+      if (interactive) window.alert(`Ошибка чтения из облака: ${String(remote.error && remote.error.message ? remote.error.message : remote.reason)}`);
+      return remote;
+    }
+
+    const remoteMs = safeDateMs(remote.updatedAt);
+    const localMs = safeDateMs(db.meta.modifiedAt);
+
+    // If nothing in cloud yet, push local.
+    if (!remote.state) {
+      const pushed = await cloudPushState();
+      setCloudUiStatus('online', 'Онлайн');
+      if (interactive && pushed.ok) window.alert('Первичная синхронизация: данные отправлены в облако.');
+      return pushed;
+    }
+
+    const lastSyncMs = safeDateMs(db.meta.lastSyncAt);
+    const localChanged = localMs > lastSyncMs;
+    const remoteChanged = remoteMs > lastSyncMs;
+
+    if (localChanged && remoteChanged) {
+      setCloudUiStatus('conflict', 'Конфликт');
+      if (!interactive) return { ok: false, reason: 'conflict' };
+      const takeRemote = window.confirm(
+        'Конфликт синхронизации:\n\nИ локальные данные, и облако менялись после последнего Sync.\n\nОК — загрузить из облака (перезапишет локальные).\nОтмена — отправить локальные (перезапишет облако).'
+      );
+      if (takeRemote) {
+        const pulled = await cloudPullState(remote.state, remote.updatedAt);
+        setCloudUiStatus('online', 'Онлайн');
+        renderDecks();
+        renderStats();
+        router();
+        return pulled;
+      }
+      const pushed = await cloudPushState();
+      setCloudUiStatus('online', 'Онлайн');
+      return pushed;
+    }
+
+    // No conflict: choose the newest side.
+    if (remoteMs > localMs) {
+      const pulled = await cloudPullState(remote.state, remote.updatedAt);
+      setCloudUiStatus('online', 'Онлайн');
+      renderDecks();
+      renderStats();
+      router();
+      return pulled;
+    }
+
+    if (localMs > remoteMs) {
+      const pushed = await cloudPushState();
+      setCloudUiStatus('online', 'Онлайн');
+      return pushed;
+    }
+
+    // Equal timestamps: still refresh markers.
+    db.meta.lastSyncAt = nowIso();
+    db.meta.lastCloudUpdatedAt = String(remote.updatedAt || '').trim() || db.meta.lastCloudUpdatedAt;
+    saveDb({ touch: false });
+    setCloudUiStatus('online', 'Онлайн');
+    return { ok: true, reason: 'no_changes' };
+  } catch (e) {
+    setCloudUiStatus('online', 'Онлайн');
+    if (interactive) window.alert(`Sync не удался: ${String(e && e.message ? e.message : e)}`);
+    return { ok: false, reason: 'exception', error: e };
+  }
+}
 
 function fnv1a32Hex(input) {
   const s = String(input || '');
@@ -346,7 +605,7 @@ async function syncFromWordFiles({ showAlerts = false } = {}) {
     }
   }
 
-  saveDb();
+  if ((totalAdded + totalUpdated + totalRemoved) > 0) saveDb();
 
   if (showAlerts) {
     window.alert(`Синхронизация слов из файлов завершена.\n\nДобавлено: ${totalAdded}\nОбновлено: ${totalUpdated}\nУдалено: ${totalRemoved}\nПропущено строк: ${totalSkipped}`);
@@ -405,6 +664,12 @@ let db = emptyDb();
 function emptyDb() {
   return {
     version: 1,
+    meta: {
+      clientId: getClientId(),
+      modifiedAt: '',
+      lastSyncAt: '',
+      lastCloudUpdatedAt: '',
+    },
     decks: [],
     notes: [],
     cards: [],
@@ -418,7 +683,7 @@ function emptyDb() {
 }
 
 function ensureSeedData() {
-  if (db.decks.length > 0) return;
+  if (db.decks.length > 0) return false;
   const deckId = uid('deck');
   const now = new Date().toISOString();
   db.decks.push({ id: deckId, name: 'Default', createdAt: now });
@@ -449,14 +714,15 @@ function ensureSeedData() {
     updatedAt: now,
   });
 
-  saveDb();
+  return true;
 }
 
 function loadDb() {
   const raw = localStorage.getItem(STORAGE_KEY);
   if (!raw) {
     db = emptyDb();
-    ensureSeedData();
+    const seeded = ensureSeedData();
+    if (seeded) saveDb();
     return;
   }
   try {
@@ -465,6 +731,7 @@ function loadDb() {
     db = {
       ...emptyDb(),
       ...parsed,
+      meta: { ...emptyDb().meta, ...(parsed.meta || {}) },
       settings: { ...emptyDb().settings, ...(parsed.settings || {}) },
       decks: Array.isArray(parsed.decks) ? parsed.decks : [],
       notes: Array.isArray(parsed.notes) ? parsed.notes : [],
@@ -476,17 +743,48 @@ function loadDb() {
     db = emptyDb();
   }
 
-  migrateDbIfNeeded();
-  ensureSeedData();
-  saveDb();
+  const changed = !!migrateDbIfNeeded() || !!ensureSeedData();
+  if (changed) saveDb();
 }
 
 function migrateDbIfNeeded() {
+  let changed = false;
   // Reserved for future versions.
-  if (!db.version) db.version = 1;
+  if (!db.version) {
+    db.version = 1;
+    changed = true;
+  }
+  if (!db.meta || typeof db.meta !== 'object') {
+    db.meta = { clientId: getClientId(), modifiedAt: '', lastSyncAt: '', lastCloudUpdatedAt: '' };
+    changed = true;
+  }
+  if (!db.meta.clientId) {
+    db.meta.clientId = getClientId();
+    changed = true;
+  }
+  if (!('modifiedAt' in db.meta)) {
+    db.meta.modifiedAt = '';
+    changed = true;
+  }
+  if (!('lastSyncAt' in db.meta)) {
+    db.meta.lastSyncAt = '';
+    changed = true;
+  }
+  if (!('lastCloudUpdatedAt' in db.meta)) {
+    db.meta.lastCloudUpdatedAt = '';
+    changed = true;
+  }
+  return changed;
 }
 
-function saveDb() {
+function touchDb() {
+  if (!db.meta) db.meta = { clientId: getClientId(), modifiedAt: '', lastSyncAt: '', lastCloudUpdatedAt: '' };
+  db.meta.modifiedAt = nowIso();
+  if (!db.meta.clientId) db.meta.clientId = getClientId();
+}
+
+function saveDb({ touch = true } = {}) {
+  if (touch) touchDb();
   localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
 }
 
@@ -1140,6 +1438,101 @@ function router() {
 }
 
 function setupHandlers() {
+  if (ui.btnCloudAuth && ui.authModal) {
+    ui.btnCloudAuth.addEventListener('click', async () => {
+      if (!cloud.enabled) {
+        const cfg = getAppConfigStatus();
+        if (!cfg.hasConfig) {
+          window.alert('Supabase не настроен: отсутствует config.js (см. README).');
+          return;
+        }
+        if (!cfg.valid) {
+          window.alert('Supabase не настроен: заполни SUPABASE_URL и SUPABASE_ANON_KEY в config.js.');
+          return;
+        }
+        // Try to (re)initialize on demand.
+        await initCloud();
+        if (!cloud.enabled) {
+          window.alert('Не получилось инициализировать Supabase (проверь загрузку supabase-js и config.js).');
+          return;
+        }
+      }
+      setAuthStatus(cloud.user ? `Вы вошли как: ${cloud.user.email || cloud.user.id}` : 'Не авторизован');
+      ui.authModal.showModal();
+    });
+  }
+
+  if (ui.btnCloudSync) {
+    ui.btnCloudSync.addEventListener('click', async () => {
+      await cloudSyncNow({ interactive: true });
+    });
+  }
+
+  if (ui.btnAuthClose && ui.authModal) {
+    ui.btnAuthClose.addEventListener('click', () => ui.authModal.close());
+  }
+
+  if (ui.btnAuthLogin) {
+    ui.btnAuthLogin.addEventListener('click', async () => {
+      if (!cloud.client) {
+        window.alert('Supabase не настроен.');
+        return;
+      }
+      const email = String(ui.authEmail && ui.authEmail.value ? ui.authEmail.value : '').trim();
+      const password = String(ui.authPassword && ui.authPassword.value ? ui.authPassword.value : '').trim();
+      if (!email || !password) {
+        window.alert('Введите email и пароль.');
+        return;
+      }
+      setAuthStatus('Входим…');
+      const { data, error } = await cloud.client.auth.signInWithPassword({ email, password });
+      if (error) {
+        setAuthStatus(`Ошибка: ${error.message}`);
+        return;
+      }
+      cloud.user = data && data.user ? data.user : null;
+      setAuthStatus(`Вы вошли как: ${cloud.user && cloud.user.email ? cloud.user.email : 'user'}`);
+      setCloudUiStatus('online', 'Онлайн');
+      // After login, do a safe sync.
+      await cloudSyncNow({ interactive: true });
+    });
+  }
+
+  if (ui.btnAuthSignup) {
+    ui.btnAuthSignup.addEventListener('click', async () => {
+      if (!cloud.client) {
+        window.alert('Supabase не настроен.');
+        return;
+      }
+      const email = String(ui.authEmail && ui.authEmail.value ? ui.authEmail.value : '').trim();
+      const password = String(ui.authPassword && ui.authPassword.value ? ui.authPassword.value : '').trim();
+      if (!email || !password) {
+        window.alert('Введите email и пароль.');
+        return;
+      }
+      setAuthStatus('Регистрируем…');
+      const { data, error } = await cloud.client.auth.signUp({ email, password });
+      if (error) {
+        setAuthStatus(`Ошибка: ${error.message}`);
+        return;
+      }
+      cloud.user = data && data.user ? data.user : null;
+      setAuthStatus('Аккаунт создан. Если включено подтверждение email — проверь почту, затем войди.');
+      setCloudUiStatus(cloud.user ? 'online' : 'offline', cloud.user ? 'Онлайн' : 'Оффлайн');
+    });
+  }
+
+  if (ui.btnAuthLogout) {
+    ui.btnAuthLogout.addEventListener('click', async () => {
+      if (!cloud.client) return;
+      setAuthStatus('Выходим…');
+      await cloud.client.auth.signOut();
+      cloud.user = null;
+      setCloudUiStatus('offline', 'Оффлайн');
+      setAuthStatus('Вы вышли.');
+    });
+  }
+
   ui.btnAddDeck.addEventListener('click', async () => {
     const name = await promptText({
       title: 'Новая колода',
@@ -1422,7 +1815,17 @@ async function boot() {
   }
 
   initBackground();
+  // Init cloud before handlers so the auth button doesn't fire too early.
+  await initCloud();
   setupHandlers();
+  // If session exists, do a safe non-interactive sync.
+  if (cloud.user) {
+    const r = await cloudSyncNow({ interactive: false });
+    if (!r.ok && r.reason === 'conflict') {
+      // Let user resolve manually.
+      setCloudUiStatus('conflict', 'Конфликт');
+    }
+  }
 
   window.addEventListener('hashchange', router);
 
