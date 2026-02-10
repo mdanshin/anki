@@ -34,12 +34,20 @@
         <span class="pill" id="cloudPill" title="Облачная синхронизация">Оффлайн</span>
         <button class="btn btn--sm btn--secondary" id="btnCloudAuth" type="button">Войти</button>
         <button class="btn btn--sm" id="btnCloudSync" type="button">Sync</button>
-        <button class="btn btn--sm btn--secondary" id="btnReloadWords" type="button">Обновить слова</button>
-        <button class="btn btn--sm btn--secondary" id="btnExport" type="button">Экспорт</button>
-        <label class="btn btn--sm btn--secondary" for="fileImport" style="cursor:pointer;">Импорт</label>
+
+        <details class="menu" id="actionsMenu">
+          <summary class="btn btn--sm btn--secondary" aria-label="Действия" title="Действия">⋯</summary>
+          <div class="menu__panel" role="menu" aria-label="Действия">
+            <button class="menu__item" id="btnReloadWords" type="button" role="menuitem">Обновить слова</button>
+            <button class="menu__item" id="btnExport" type="button" role="menuitem">Экспорт</button>
+            <label class="menu__item" for="fileImport" role="menuitem" tabindex="0">Импорт</label>
+          </div>
+        </details>
         <input id="fileImport" type="file" accept="application/json" hidden />
       </nav>
     </header>
+
+    <div class="toasts" id="toasts" aria-live="polite" aria-atomic="true"></div>
 
     <!-- DECKS -->
     <section class="screen" id="screenDecks" data-screen>
@@ -166,7 +174,7 @@
     <section class="screen screen--review" id="screenReview" data-screen hidden>
       <div class="reviewTop">
         <div class="pill" id="reviewContext">—</div>
-        <button class="btn btn--sm btn--secondary" id="btnExitReview" type="button">Выйти</button>
+        <button class="btn btn--sm btn--secondary" id="btnExitReview" type="button" title="Esc" aria-keyshortcuts="Escape">Выйти</button>
       </div>
 
       <div class="card reviewCard" role="group" aria-label="Карточка">
@@ -175,16 +183,16 @@
       </div>
 
       <div class="row row--buttons" id="reviewActionsQuestion">
-        <button class="btn" id="btnShowAnswer" type="button">Показать ответ</button>
+        <button class="btn" id="btnShowAnswer" type="button" title="Space" aria-keyshortcuts="Space">Показать ответ</button>
       </div>
 
       <div class="card" id="reviewActionsAnswer" hidden>
         <div class="muted small" style="margin-bottom:8px;">Оценка (чем лучше — тем дальше отложим)</div>
         <div class="row row--buttons">
-          <button class="btn btn--danger" id="btnAgain" type="button">Again</button>
-          <button class="btn btn--warn" id="btnHard" type="button">Hard</button>
-          <button class="btn btn--good" id="btnGood" type="button">Good</button>
-          <button class="btn" id="btnEasy" type="button">Easy</button>
+          <button class="btn btn--danger" id="btnAgain" type="button" title="1" aria-keyshortcuts="1" data-key="1">Again</button>
+          <button class="btn btn--warn" id="btnHard" type="button" title="2" aria-keyshortcuts="2" data-key="2">Hard</button>
+          <button class="btn btn--good" id="btnGood" type="button" title="3" aria-keyshortcuts="3" data-key="3">Good</button>
+          <button class="btn" id="btnEasy" type="button" title="4" aria-keyshortcuts="4" data-key="4">Easy</button>
         </div>
       </div>
 

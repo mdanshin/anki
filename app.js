@@ -91,6 +91,9 @@ const ui = {
   navBrowse: document.getElementById('navBrowse'),
   navStats: document.getElementById('navStats'),
 
+  actionsMenu: document.getElementById('actionsMenu'),
+  toasts: document.getElementById('toasts'),
+
   cloudPill: document.getElementById('cloudPill'),
   btnCloudAuth: document.getElementById('btnCloudAuth'),
   btnCloudSync: document.getElementById('btnCloudSync'),
@@ -173,6 +176,52 @@ const cloud = {
   user: null,
   lastStatus: 'offline',
 };
+
+function closeActionsMenu() {
+  if (!ui.actionsMenu) return;
+  ui.actionsMenu.open = false;
+}
+
+function notify(text, { kind = 'info', timeoutMs = 4200 } = {}) {
+  const msg = String(text || '').trim();
+  if (!msg) return;
+
+  if (!ui.toasts) {
+    window.alert(msg);
+    return;
+  }
+
+  const el = document.createElement('div');
+  el.className = `toast toast--${kind}`;
+  el.textContent = msg;
+  el.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  el.tabIndex = 0;
+  el.title = 'Нажми чтобы закрыть';
+
+  ui.toasts.appendChild(el);
+
+  // Keep the stack small.
+  while (ui.toasts.children.length > 3) {
+    ui.toasts.removeChild(ui.toasts.firstElementChild);
+  }
+
+  const remove = () => {
+    if (!el.isConnected) return;
+    el.remove();
+  };
+
+  const t = window.setTimeout(remove, Math.max(1500, Number(timeoutMs) || 0));
+  const cancelTimer = () => window.clearTimeout(t);
+
+  el.addEventListener('click', remove);
+  el.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' || e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      remove();
+    }
+  });
+  el.addEventListener('pointerenter', cancelTimer, { once: true });
+}
 
 function getAppConfigStatus() {
   const cfg = (window && window.ANKI_APP_CONFIG) ? window.ANKI_APP_CONFIG : null;
@@ -311,11 +360,11 @@ async function cloudPullState(incomingState, incomingUpdatedAt) {
 
 async function cloudSyncNow({ interactive = true } = {}) {
   if (!cloud.enabled) {
-    if (interactive) window.alert('Облачная синхронизация не настроена: нет config.js или не загрузился supabase-js.');
+    if (interactive) notify('Облачная синхронизация не настроена: нет config.js или не загрузился supabase-js.', { kind: 'warn', timeoutMs: 8000 });
     return { ok: false, reason: 'not_configured' };
   }
   if (!cloud.user) {
-    if (interactive) window.alert('Сначала войди в аккаунт.');
+    if (interactive) notify('Сначала войди в аккаунт.', { kind: 'warn', timeoutMs: 7000 });
     return { ok: false, reason: 'no_user' };
   }
 
@@ -324,7 +373,7 @@ async function cloudSyncNow({ interactive = true } = {}) {
     const remote = await cloudFetchState();
     if (!remote.ok) {
       setCloudUiStatus('online', 'Онлайн');
-      if (interactive) window.alert(`Ошибка чтения из облака: ${String(remote.error && remote.error.message ? remote.error.message : remote.reason)}`);
+      if (interactive) notify(`Ошибка чтения из облака: ${String(remote.error && remote.error.message ? remote.error.message : remote.reason)}`, { kind: 'error', timeoutMs: 9000 });
       return remote;
     }
 
@@ -335,7 +384,7 @@ async function cloudSyncNow({ interactive = true } = {}) {
     if (!remote.state) {
       const pushed = await cloudPushState();
       setCloudUiStatus('online', 'Онлайн');
-      if (interactive && pushed.ok) window.alert('Первичная синхронизация: данные отправлены в облако.');
+      if (interactive && pushed.ok) notify('Первичная синхронизация: данные отправлены в облако.', { kind: 'success', timeoutMs: 7000 });
       return pushed;
     }
 
@@ -386,7 +435,7 @@ async function cloudSyncNow({ interactive = true } = {}) {
     return { ok: true, reason: 'no_changes' };
   } catch (e) {
     setCloudUiStatus('online', 'Онлайн');
-    if (interactive) window.alert(`Sync не удался: ${String(e && e.message ? e.message : e)}`);
+    if (interactive) notify(`Sync не удался: ${String(e && e.message ? e.message : e)}`, { kind: 'error', timeoutMs: 10000 });
     return { ok: false, reason: 'exception', error: e };
   }
 }
@@ -462,12 +511,12 @@ async function syncFromWordFiles({ showAlerts = false } = {}) {
   try {
     cfgText = await tryFetchText(WORDS_CONFIG_URL);
   } catch (e) {
-    if (showAlerts) window.alert(`Не получилось загрузить ${WORDS_CONFIG_URL}.\n\nПроверь что файл существует и сайт открыт через HTTP.`);
+    if (showAlerts) notify(`Не получилось загрузить ${WORDS_CONFIG_URL}.\n\nПроверь что файл существует и сайт открыт через HTTP.`, { kind: 'error', timeoutMs: 10000 });
     return { ok: false, reason: 'no_config', error: e };
   }
 
   if (!cfgText) {
-    if (showAlerts) window.alert(`Файл ${WORDS_CONFIG_URL} не найден. Создай его и положи рядом папку words/.`);
+    if (showAlerts) notify(`Файл ${WORDS_CONFIG_URL} не найден. Создай его и положи рядом папку words/.`, { kind: 'warn', timeoutMs: 9000 });
     return { ok: false, reason: 'no_config' };
   }
 
@@ -476,12 +525,12 @@ async function syncFromWordFiles({ showAlerts = false } = {}) {
   try {
     cfg = JSON.parse(cfgText);
   } catch (e) {
-    if (showAlerts) window.alert(`Ошибка JSON в ${WORDS_CONFIG_URL}: ${String(e && e.message ? e.message : e)}`);
+    if (showAlerts) notify(`Ошибка JSON в ${WORDS_CONFIG_URL}: ${String(e && e.message ? e.message : e)}`, { kind: 'error', timeoutMs: 12000 });
     return { ok: false, reason: 'bad_config', error: e };
   }
 
   if (!Array.isArray(cfg)) {
-    if (showAlerts) window.alert(`${WORDS_CONFIG_URL} должен быть массивом.`);
+    if (showAlerts) notify(`${WORDS_CONFIG_URL} должен быть массивом.`, { kind: 'error', timeoutMs: 9000 });
     return { ok: false, reason: 'bad_config' };
   }
 
@@ -518,7 +567,7 @@ async function syncFromWordFiles({ showAlerts = false } = {}) {
       text = null;
     }
     if (!text) {
-      if (showAlerts) window.alert(`Не получилось загрузить файл колоды: ${file}`);
+      if (showAlerts) notify(`Не получилось загрузить файл колоды: ${file}`, { kind: 'error', timeoutMs: 9000 });
       continue;
     }
 
@@ -608,7 +657,7 @@ async function syncFromWordFiles({ showAlerts = false } = {}) {
   if ((totalAdded + totalUpdated + totalRemoved) > 0) saveDb();
 
   if (showAlerts) {
-    window.alert(`Синхронизация слов из файлов завершена.\n\nДобавлено: ${totalAdded}\nОбновлено: ${totalUpdated}\nУдалено: ${totalRemoved}\nПропущено строк: ${totalSkipped}`);
+    notify(`Синхронизация слов из файлов завершена.\n\nДобавлено: ${totalAdded}\nОбновлено: ${totalUpdated}\nУдалено: ${totalRemoved}\nПропущено строк: ${totalSkipped}`, { kind: 'success', timeoutMs: 10000 });
   }
 
   return { ok: true, added: totalAdded, updated: totalUpdated, removed: totalRemoved, skipped: totalSkipped };
@@ -973,9 +1022,22 @@ function renderDecks() {
   const sorted = db.decks.slice().sort((a, b) => a.name.localeCompare(b.name, 'ru'));
   for (const d of sorted) {
     const c = computeCounts(d.id);
+    const href = `#/deck/${encodeURIComponent(d.id)}`;
 
     const row = document.createElement('div');
-    row.className = 'listItem';
+    row.className = 'listItem listItem--clickable';
+    row.tabIndex = 0;
+    row.setAttribute('role', 'link');
+    row.setAttribute('aria-label', `Открыть колоду: ${d.name}`);
+    row.addEventListener('click', () => {
+      location.hash = href;
+    });
+    row.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        location.hash = href;
+      }
+    });
 
     const left = document.createElement('div');
     left.innerHTML = `<div class="listItem__title">${escapeHtml(d.name)}</div><div class="listItem__meta">Due: ${formatCount(c.due)} · New: ${formatCount(c.newCount)} · Всего: ${formatCount(c.total)}</div>`;
@@ -985,7 +1047,7 @@ function renderDecks() {
 
     const open = document.createElement('a');
     open.className = 'btn btn--sm';
-    open.href = `#/deck/${encodeURIComponent(d.id)}`;
+    open.href = href;
     open.textContent = 'Открыть';
 
     right.appendChild(open);
@@ -1014,6 +1076,7 @@ function renderDeck(deckId) {
 
   ui.deckCardsList.innerHTML = '';
   for (const note of notes.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))) {
+    const editHref = `#/add?deck=${encodeURIComponent(deckId)}&note=${encodeURIComponent(note.id)}`;
     const card = getCardByNote(note.id);
     const badge = (() => {
       if (!card) return '<span class="badge">—</span>';
@@ -1024,7 +1087,19 @@ function renderDeck(deckId) {
     })();
 
     const item = document.createElement('div');
-    item.className = 'listItem';
+    item.className = 'listItem listItem--clickable';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'link');
+    item.setAttribute('aria-label', `Редактировать карточку: ${String(note.front || '—').slice(0, 80)}`);
+    item.addEventListener('click', () => {
+      location.hash = editHref;
+    });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        location.hash = editHref;
+      }
+    });
 
     const left = document.createElement('div');
     left.innerHTML = `<div class="listItem__title">${escapeHtml(note.front).slice(0, 80) || '—'}</div><div class="listItem__meta">${escapeHtml((note.tags || []).join(' '))}</div>`;
@@ -1040,8 +1115,9 @@ function renderDeck(deckId) {
     edit.type = 'button';
     edit.title = 'Редактировать';
     edit.textContent = '✎';
-    edit.addEventListener('click', () => {
-      location.hash = `#/add?note=${encodeURIComponent(note.id)}`;
+    edit.addEventListener('click', (e) => {
+      e.stopPropagation();
+      location.hash = editHref;
     });
 
     const del = document.createElement('button');
@@ -1049,7 +1125,8 @@ function renderDeck(deckId) {
     del.type = 'button';
     del.title = 'Удалить';
     del.textContent = '🗑';
-    del.addEventListener('click', async () => {
+    del.addEventListener('click', async (e) => {
+      e.stopPropagation();
       const ok = await confirmDialog({ title: 'Удалить карточку?', text: 'Действие необратимо.' });
       if (!ok) return;
       deleteNote(note.id);
@@ -1192,9 +1269,22 @@ function renderBrowse() {
 
   ui.browseList.innerHTML = '';
   for (const note of notes.slice().sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))) {
+    const editHref = `#/add?deck=${encodeURIComponent(note.deckId)}&note=${encodeURIComponent(note.id)}`;
     const deck = getDeck(note.deckId);
     const item = document.createElement('div');
-    item.className = 'listItem';
+    item.className = 'listItem listItem--clickable';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'link');
+    item.setAttribute('aria-label', `Редактировать карточку: ${String(note.front || '—').slice(0, 80)}`);
+    item.addEventListener('click', () => {
+      location.hash = editHref;
+    });
+    item.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        location.hash = editHref;
+      }
+    });
 
     const left = document.createElement('div');
     left.innerHTML = `<div class="listItem__title">${escapeHtml(note.front).slice(0, 80) || '—'}</div><div class="listItem__meta">${escapeHtml(deck ? deck.name : '—')} · ${escapeHtml((note.tags || []).join(' '))}</div>`;
@@ -1207,8 +1297,9 @@ function renderBrowse() {
     edit.type = 'button';
     edit.title = 'Редактировать';
     edit.textContent = '✎';
-    edit.addEventListener('click', () => {
-      location.hash = `#/add?note=${encodeURIComponent(note.id)}`;
+    edit.addEventListener('click', (e) => {
+      e.stopPropagation();
+      location.hash = editHref;
     });
 
     right.appendChild(edit);
@@ -1438,22 +1529,49 @@ function router() {
 }
 
 function setupHandlers() {
+  if (ui.actionsMenu) {
+    ui.actionsMenu.addEventListener('click', (e) => {
+      if (!(e.target instanceof Element)) return;
+      if (e.target.closest('.menu__item')) closeActionsMenu();
+    });
+
+    ui.actionsMenu.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeActionsMenu();
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!ui.actionsMenu || !ui.actionsMenu.open) return;
+      if (ui.actionsMenu.contains(/** @type {any} */ (e.target))) return;
+      closeActionsMenu();
+    });
+
+    const importLabel = ui.actionsMenu.querySelector('label[for="fileImport"]');
+    if (importLabel && ui.fileImport) {
+      importLabel.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter' && e.key !== ' ') return;
+        e.preventDefault();
+        ui.fileImport.click();
+        closeActionsMenu();
+      });
+    }
+  }
+
   if (ui.btnCloudAuth && ui.authModal) {
     ui.btnCloudAuth.addEventListener('click', async () => {
       if (!cloud.enabled) {
         const cfg = getAppConfigStatus();
         if (!cfg.hasConfig) {
-          window.alert('Supabase не настроен: отсутствует config.js (см. README).');
+          notify('Supabase не настроен: отсутствует config.js (см. README).', { kind: 'warn', timeoutMs: 9000 });
           return;
         }
         if (!cfg.valid) {
-          window.alert('Supabase не настроен: заполни SUPABASE_URL и SUPABASE_ANON_KEY в config.js.');
+          notify('Supabase не настроен: заполни SUPABASE_URL и SUPABASE_ANON_KEY в config.js.', { kind: 'warn', timeoutMs: 9000 });
           return;
         }
         // Try to (re)initialize on demand.
         await initCloud();
         if (!cloud.enabled) {
-          window.alert('Не получилось инициализировать Supabase (проверь загрузку supabase-js и config.js).');
+          notify('Не получилось инициализировать Supabase (проверь загрузку supabase-js и config.js).', { kind: 'error', timeoutMs: 12000 });
           return;
         }
       }
@@ -1475,13 +1593,13 @@ function setupHandlers() {
   if (ui.btnAuthLogin) {
     ui.btnAuthLogin.addEventListener('click', async () => {
       if (!cloud.client) {
-        window.alert('Supabase не настроен.');
+        notify('Supabase не настроен.', { kind: 'warn', timeoutMs: 8000 });
         return;
       }
       const email = String(ui.authEmail && ui.authEmail.value ? ui.authEmail.value : '').trim();
       const password = String(ui.authPassword && ui.authPassword.value ? ui.authPassword.value : '').trim();
       if (!email || !password) {
-        window.alert('Введите email и пароль.');
+        notify('Введите email и пароль.', { kind: 'warn', timeoutMs: 7000 });
         return;
       }
       setAuthStatus('Входим…');
@@ -1501,13 +1619,13 @@ function setupHandlers() {
   if (ui.btnAuthSignup) {
     ui.btnAuthSignup.addEventListener('click', async () => {
       if (!cloud.client) {
-        window.alert('Supabase не настроен.');
+        notify('Supabase не настроен.', { kind: 'warn', timeoutMs: 8000 });
         return;
       }
       const email = String(ui.authEmail && ui.authEmail.value ? ui.authEmail.value : '').trim();
       const password = String(ui.authPassword && ui.authPassword.value ? ui.authPassword.value : '').trim();
       if (!email || !password) {
-        window.alert('Введите email и пароль.');
+        notify('Введите email и пароль.', { kind: 'warn', timeoutMs: 7000 });
         return;
       }
       setAuthStatus('Регистрируем…');
@@ -1573,7 +1691,7 @@ function setupHandlers() {
 
     if (!deckId) return;
     if (!front || !back) {
-      window.alert('Нужно заполнить Front и Back.');
+      notify('Нужно заполнить Front и Back.', { kind: 'warn', timeoutMs: 7000 });
       return;
     }
 
@@ -1594,13 +1712,13 @@ function setupHandlers() {
 
       if (!deckId) return;
       if (!bulk.trim()) {
-        window.alert('Вставь список строк (front\\tback или front;back).');
+        notify('Вставь список строк (front\\tback или front;back).', { kind: 'warn', timeoutMs: 9000 });
         return;
       }
 
       const { pairs, skipped } = parseBulkLines(bulk);
       if (pairs.length === 0) {
-        window.alert(`Не нашёл ни одной валидной строки. Пример: house\\tдом (tab) или house;дом. Пропущено строк: ${skipped}.`);
+        notify(`Не нашёл ни одной валидной строки. Пример: house\\tдом (tab) или house;дом. Пропущено строк: ${skipped}.`, { kind: 'warn', timeoutMs: 12000 });
         return;
       }
 
@@ -1612,7 +1730,7 @@ function setupHandlers() {
 
       saveDb();
       renderDecks();
-      window.alert(`Добавлено: ${added}. Пропущено строк: ${skipped}.`);
+      notify(`Добавлено: ${added}. Пропущено строк: ${skipped}.`, { kind: 'success', timeoutMs: 9000 });
       ui.bulkInput.value = '';
       location.hash = `#/deck/${encodeURIComponent(deckId)}`;
     });
@@ -1639,7 +1757,7 @@ function setupHandlers() {
     saveDb();
     renderStats();
     renderDecks();
-    window.alert('Сохранено.');
+    notify('Сохранено.', { kind: 'success' });
   });
 
   ui.btnResetAll.addEventListener('click', async () => {
@@ -1675,7 +1793,7 @@ function setupHandlers() {
     try {
       text = await file.text();
     } catch {
-      window.alert('Не получилось прочитать файл.');
+      notify('Не получилось прочитать файл.', { kind: 'error', timeoutMs: 9000 });
       return;
     }
 
@@ -1683,13 +1801,13 @@ function setupHandlers() {
     try {
       parsed = JSON.parse(text);
     } catch {
-      window.alert('Это не JSON.');
+      notify('Это не JSON.', { kind: 'error', timeoutMs: 7000 });
       return;
     }
 
     const incoming = parsed && parsed.data ? parsed.data : parsed;
     if (!incoming || typeof incoming !== 'object') {
-      window.alert('Неверный формат экспорта.');
+      notify('Неверный формат экспорта.', { kind: 'error', timeoutMs: 8000 });
       return;
     }
 
@@ -1702,6 +1820,58 @@ function setupHandlers() {
     saveDb();
 
     location.hash = '#/decks';
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented) return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.repeat) return;
+
+    const route = parseRoute();
+    if (route.name !== 'review') return;
+
+    if ((ui.modal && ui.modal.open) || (ui.authModal && ui.authModal.open)) return;
+
+    const active = document.activeElement;
+    const tag = active && /** @type {any} */ (active).tagName ? String(/** @type {any} */ (active).tagName).toLowerCase() : '';
+    if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      location.hash = '#/decks';
+      return;
+    }
+
+    const onQuestion = ui.reviewActionsQuestion && !ui.reviewActionsQuestion.hidden;
+    const onAnswer = ui.reviewActionsAnswer && !ui.reviewActionsAnswer.hidden;
+
+    if (onQuestion && (e.key === ' ' || e.key === 'Enter')) {
+      e.preventDefault();
+      showAnswer();
+      return;
+    }
+
+    if (!onAnswer) return;
+
+    if (e.key === '1') {
+      e.preventDefault();
+      answer('again');
+      return;
+    }
+    if (e.key === '2') {
+      e.preventDefault();
+      answer('hard');
+      return;
+    }
+    if (e.key === '3') {
+      e.preventDefault();
+      answer('good');
+      return;
+    }
+    if (e.key === '4') {
+      e.preventDefault();
+      answer('easy');
+    }
   });
 }
 
