@@ -1,7 +1,7 @@
 [
   {
-    "name": "English",
-    "file": "./words/english.tsv",
-    "tags": "eng"
+    "name": "Oxford 3000 (all)",
+    "file": "./words/oxford3000.tsv",
+    "tags": "eng oxford3000"
   }
 ]
